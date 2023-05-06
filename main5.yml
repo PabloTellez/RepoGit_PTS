@@ -1,0 +1,67 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Segurida
+Parameters:
+  TInstancia:
+    Type: String
+    Default: "t2.small"
+    Description: Parametros a plantilla de CloudFormation
+    AllowedValues:
+      - t2.nano
+      - t2.micro
+      - t2.small
+      - t2.medium
+      - t2.large
+  IdImagen:
+    Type: "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id"
+    Default: "/aws/service/canonical/ubuntu/server/20.04/stable/current/amd64/hvm/ebs-gp2/ami-id"
+
+Resources:
+    SecurityGroup:
+        Type: AWS::EC2::SecurityGroup
+        Properties:
+          GroupDescription: !Sub "Grupo de Seguridad interno para la pila {AWS::StackName}"
+          GroupName: pilaPabloT2
+          SecurityGroupIngress:
+            - IpProtocol: tcp
+              FromPort: 22
+              ToPort: 22
+              CidrIp: 0.0.0.0/0
+            - IpProtocol: tcp
+              FromPort: 443
+              ToPort: 443
+              CidrIp: 0.0.0.0/0
+            - IpProtocol: tcp
+              FromPort: 80
+              ToPort: 80
+              CidrIp: 0.0.0.0/0
+          Tags:
+            - Key: Name
+              Value: !Join ["-", [ !Ref AWS::StackName, !Ref AWS::AccountId ] ]
+
+    WordPressServer:
+      Type: AWS::EC2::Instance
+      Properties:
+        ImageId: !Ref IdImagen
+        SecurityGroupIds:
+          - Ref: SecurityGroup
+        IamInstanceProfile: LabInstanceProfile
+        InstanceType: !Ref TInstancia
+        KeyName: vockey
+        Tags:
+          - Key: Name
+            Value: !Join ["-", [ !Ref AWS::StackName, !Ref AWS::AccountId ] ]
+
+Outputs:
+  InstanceId:
+    Description: "Id Instancia EC2"
+    Value: AWS::StackId
+    Export:
+      Name: AWS::StackId
+
+  ServerPublicIP:
+    Description: DNS
+    Value: !Sub 
+      - 'http://.${Domain}:80'
+      - Domain: !GetAtt WordPressServer.PublicDnsName
+    Export:
+      Name: ServerPublicIp
