@@ -1,0 +1,150 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Segurida
+Parameters:
+  TInstancia:
+    Type: String
+    Default: "t2.micro"
+    Description: Parametros a plantilla de CloudFormation
+    AllowedValues:
+      - t2.nano
+      - t2.micro
+      - t2.small
+      - t2.medium
+      - t2.large
+  IdImagen:
+    Type: "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id"
+    Default: "/aws/service/canonical/ubuntu/server/20.04/stable/current/amd64/hvm/ebs-gp2/ami-id"
+  DBName:
+    Type: String
+    Description: nombre bbsd
+    Default: wordpress
+  DBUser:
+    Type: String
+    Description: usuario
+    Default: admin
+  DBPassword:
+    Type: String
+    NoEcho: true
+    Description: password
+    MinLength: 8
+    Default: usuario1
+Resources:
+    SecurityGroup:
+        Type: AWS::EC2::SecurityGroup
+        Properties:
+          GroupDescription: !Sub "Grupo de Seguridad interno para la pila ${AWS::StackName}"
+          GroupName: pilaPablo
+          SecurityGroupIngress:
+            - IpProtocol: tcp
+              FromPort: 22
+              ToPort: 22
+              CidrIp: 0.0.0.0/0
+            - IpProtocol: tcp
+              FromPort: 443
+              ToPort: 443
+              CidrIp: 0.0.0.0/0
+            - IpProtocol: tcp
+              FromPort: 80
+              ToPort: 80
+              CidrIp: 0.0.0.0/0
+          Tags:
+            - Key: Name
+              Value: !Join ["-", [ !Ref AWS::StackName, !Ref AWS::AccountId ] ]
+    DBEC2SecurityGroup:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupDescription: Open database for access
+        SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupName:
+            Ref: SecurityGroup
+
+    WordPressServer:
+      Type: AWS::EC2::Instance
+      CreationPolicy:
+        ResourceSignal:
+            Timeout: PT7M
+            Count: 1
+      Properties:
+        ImageId: ami-02396cdd13e9a1257
+        SecurityGroupIds:
+          - Ref: SecurityGroup
+        IamInstanceProfile: LabInstanceProfile
+        InstanceType: t2.small
+        KeyName: vockey
+        UserData:
+            Fn::Base64: !Sub |
+              #!/bin/bash
+              sudo dnf update -y
+              sudo dnf install httpd wget php-fpm php-mysqli php-json php8.1 php-devel
+              sudo dnf install -y mariadb105
+              sudo systemctl enable httpd
+              sudo dnf install wget php-mysqlnd httpd php-fpm php-mysqli mariadb105-server php-json php php-devel -y
+              wget https://wordpress.org/latest.tar.gz
+              tar -xzf latest.tar.gz
+              sudo systemctl start mariadb httpd
+              sudo mv /wordpress/* /var/www/html
+              sudo mysqladmin -u root password
+              sudo mysql -u pablot -pusuario -P ${RDSDB.Endpoint.Port} -h ${RDSDB.Endpoint.Address} -e "CREATE DATABASE `DBTareaFinalPabloT`;
+              CREATE USER 'pablo'@'localhost' IDENTIFIED BY 'root';
+              GRANT ALL PRIVILEGES ON `WordpressLAMP`.* TO "pablo"@"localhost";
+              FLUSH PRIVILEGES;
+              cp wordpress/wp-config-sample.php wordpress/wp-config.php
+              sed 's/NONE/ALLOW/3' wp-config.php
+              sed 's/username_here/pablo' wp-config.php  
+              sed 's/password_here/usuario' wp-config.php
+
+              # Para que nadie pueda entrar sin la contraseña
+              mysql -e "UPDATE mysql.user SET Password = PASSWORD('CHANGEME') WHERE User = 'root'" 
+
+              # Borrar los usuarios anónimos
+              mysql -e "DROP USER ''@'localhost'" 
+
+              # Nuestro hostname puede variar
+              mysql -e "DROP USER ''@'$(hostname)'"
+
+              # Borramos la bbsd por defecto
+              mysql -e "DROP DATABASE test"
+
+              # Guardar los cambios
+              mysql -e "FLUSH PRIVILEGES""
+
+              exit
+              /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource WordPressServer --region ${AWS::Region}
+              
+        Tags:
+          - Key: Name
+            Value: !Join ["-", [ !Ref AWS::StackName, !Ref AWS::AccountId ] ]
+
+
+
+    RDSDB:
+      Type: AWS::RDS::DBInstance
+      Properties:
+        AllocatedStorage: 20
+        DBInstanceClass: db.t2.micro
+        Engine: mariadb
+        EngineVersion: "10.4"
+        DBName: !Ref DBName
+        MasterUsername: !Ref DBUser
+        MasterUserPassword: !Ref DBPassword
+        PubliclyAccessible: false
+        VPCSecurityGroups:
+        - !GetAtt DBEC2SecurityGroup.GroupId
+
+Outputs:
+  InstanceId:
+    Description: "Id Instancia EC2"
+    Value: !Ref WordPressServer
+    Export:
+      Name: Outputs
+
+  ServerPublicIP:
+    Description: "DNS"
+    Value: !Sub 
+      - 'http://.${Domain}:80'
+      - Domain: !GetAtt WordPressServer.PublicDnsName
+    Export:
+      Name: ServerPublicIp
